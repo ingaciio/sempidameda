@@ -1,12 +1,10 @@
 /**
  * Shared trademark search engine.
  * Processes normalized TrademarkMatch[] from any registry (INPI, WIPO, etc.)
- * and produces a single CheckResult with NIZA class filtering, detail text,
- * and structured matchGroups for UI rendering.
+ * and produces a single CheckResult with NIZA class filtering, a short detail
+ * summary, and structured matchGroups for collapsible UI rendering.
  *
  * Status is determined ONLY by exact-name matches.
- * Similar matches (compound names, letter variations) in relevant classes
- * are shown as informational context.
  */
 import type {
   CheckResult,
@@ -16,13 +14,32 @@ import type {
 } from "../types.js";
 import { CLASE_DESCRIPTIONS, inferRelevantClasses } from "../niza.js";
 
-/**
- * Process trademark matches from any registry into a CheckResult.
- *
- * @param matches   - All matches (exact + similar), each flagged with isExactMatch
- * @param config    - Platform info, description for NIZA filtering, brand name
- * @param startTime - Date.now() from when the check started (for responseTimeMs)
- */
+const DOUBT_DISTANCE_THRESHOLD = 12;
+
+function normalize(s: string): string {
+  return s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let curr = new Array<number>(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] =
+        a[i - 1] === b[j - 1]
+          ? prev[j - 1]
+          : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
 export function processTrademarkMatches(
   matches: TrademarkMatch[],
   config: TrademarkSearchConfig,
@@ -50,11 +67,9 @@ export function processTrademarkMatches(
   const contains = matches.filter((m) => m.similarityLevel === "contains");
   const partial = matches.filter((m) => m.similarityLevel === "partial");
 
-  // ── Separate active / inactive (exact only — for status) ──────────
+  // ── Separate active / inactive ────────────────────────────────────
   const exactActive = exact.filter((m) => m.isActive);
   const exactInactive = exact.filter((m) => !m.isActive);
-
-  // ── Active similar matches ──────────────────────────────────────
   const containsActive = contains.filter((m) => m.isActive);
   const partialActive = partial.filter((m) => m.isActive);
 
@@ -65,7 +80,6 @@ export function processTrademarkMatches(
   const matchHasRelevantClass = (m: TrademarkMatch) =>
     m.niceClasses.some((nc) => relevantClasses.includes(nc));
 
-  // Exact: split by relevant class
   const exactActiveRelevant = hasFilter
     ? exactActive.filter(matchHasRelevantClass)
     : exactActive;
@@ -73,7 +87,6 @@ export function processTrademarkMatches(
     ? exactActive.filter((m) => !matchHasRelevantClass(m))
     : [];
 
-  // Contains/partial: filter by relevant class if available
   const containsRelevant = hasFilter
     ? containsActive.filter(matchHasRelevantClass)
     : containsActive;
@@ -81,24 +94,9 @@ export function processTrademarkMatches(
     ? partialActive.filter(matchHasRelevantClass)
     : partialActive;
 
-  // ── Format helpers ────────────────────────────────────────────────
-  const fmtExact = (m: TrademarkMatch) => {
-    const nc =
-      m.niceClasses.length > 0 ? m.niceClasses.map(String).join(", ") : "?";
-    const claseDesc = m.niceClasses
-      .map((c) => CLASE_DESCRIPTIONS[c] || `${c}`)
-      .join(", ");
-    const statusShort = m.status.split("(")[0].trim();
-    const ownerShort =
-      m.owner.length > 50 ? m.owner.substring(0, 50) + "..." : m.owner;
-    const countryPart = m.country ? ` - ${m.country}` : "";
-    return `  Clase ${nc} (${claseDesc})${countryPart} - ${statusShort} - ${ownerShort}`;
-  };
-
-  // ── Build detail text (summary) ─────────────────────────────────
+  // ── Build SHORT detail text (no individual listings) ──────────────
   const parts: string[] = [];
 
-  // Context line
   if (config.totalSimilarResults) {
     const countries = new Set(
       matches.filter((m) => m.country).map((m) => m.country)
@@ -108,62 +106,47 @@ export function processTrademarkMatches(
     );
   }
 
-  // ── Exact matches section ─────────────────────────────────────────
+  if (hasFilter) {
+    const classDescs = relevantClasses
+      .slice(0, 4)
+      .map((c) => `${c} (${CLASE_DESCRIPTIONS[c] || "?"})`)
+      .join(", ");
+    parts.push(`Clases de tu rubro: ${classDescs}`);
+  }
+
   if (exact.length > 0) {
     if (exactActive.length > 0) {
       if (hasFilter) {
-        parts.push(
-          `Clases relevantes para tu rubro: ${relevantClasses.join(", ")}`
-        );
-
         if (exactActiveRelevant.length > 0) {
           parts.push(
-            `⚠️ ${exactActiveRelevant.length} exacta(s) activa(s) EN TU RUBRO:`
+            `⚠️ ${exactActiveRelevant.length} exacta(s) activa(s) EN TU RUBRO`
           );
-          for (const m of exactActiveRelevant.slice(0, 6)) parts.push(fmtExact(m));
-          if (exactActiveRelevant.length > 6)
-            parts.push(`  ... y ${exactActiveRelevant.length - 6} mas`);
         } else {
           parts.push(`✅ Ninguna exacta activa en tus clases`);
         }
-
         if (exactActiveOther.length > 0) {
           parts.push(
-            `ℹ️ ${exactActiveOther.length} exacta(s) activa(s) en otras clases:`
+            `ℹ️ ${exactActiveOther.length} exacta(s) activa(s) en otros rubros`
           );
-          for (const m of exactActiveOther.slice(0, 4)) parts.push(fmtExact(m));
-          if (exactActiveOther.length > 4)
-            parts.push(`  ... y ${exactActiveOther.length - 4} mas`);
         }
       } else {
-        // No description filter → show all exact active
-        const label = config.totalSimilarResults
-          ? `🔎 ${exactActive.length} exacta(s) activa(s):`
-          : `${exact.length} coincidencia(s) exacta(s). ${exactActive.length} activa(s):`;
-        parts.push(label);
-        for (const m of exactActive.slice(0, 8)) parts.push(fmtExact(m));
-        if (exactActive.length > 8)
-          parts.push(`  ... y ${exactActive.length - 8} mas`);
+        parts.push(`🔎 ${exactActive.length} exacta(s) activa(s)`);
       }
-
       if (exactInactive.length > 0) {
         parts.push(`+ ${exactInactive.length} exacta(s) inactiva(s)`);
       }
     } else {
-      // All exact matches are inactive
       const statuses = [
         ...new Set(exactInactive.map((m) => m.status.split("(")[0].trim())),
       ].join(", ");
       parts.push(
-        `${exact.length} coincidencia(s) exacta(s), pero todas inactivas (${statuses})`
+        `${exact.length} exacta(s), todas inactivas (${statuses})`
       );
     }
   } else if (config.totalSimilarResults) {
-    // No exact matches but there were search results
     parts.push(`Ninguna coincidencia exacta con "${config.brandName}"`);
   }
 
-  // ── Similar matches summary (counts only — full data in matchGroups) ──
   const classLabel = hasFilter ? " en tu rubro" : "";
   if (containsRelevant.length > 0) {
     parts.push(
@@ -176,19 +159,71 @@ export function processTrademarkMatches(
     );
   }
 
-  // ── Determine status (ONLY from exact matches) ────────────────────
+  // ── Determine status ────────────────────────────────────────────
+  // taken: exact active match in relevant classes (or any if no filter)
+  // unknown: no exact active, but contains/partial active within distance < 12
+  // available: nothing close enough
   const isTaken = hasFilter
     ? exactActiveRelevant.length > 0
     : exactActive.length > 0;
 
-  // ── Build matchGroups (ALL matches, not truncated) ────────────────
+  let isDoubtful = false;
+  if (!isTaken) {
+    const searchNorm = normalize(config.brandName);
+    const nearMatches = hasFilter
+      ? [...containsRelevant, ...partialRelevant]
+      : [...containsActive, ...partialActive];
+
+    isDoubtful = nearMatches.some((m) => {
+      const dist = levenshtein(normalize(m.brandName), searchNorm);
+      return dist < DOUBT_DISTANCE_THRESHOLD;
+    });
+
+    if (isDoubtful) {
+      const closeCount = nearMatches.filter(
+        (m) => levenshtein(normalize(m.brandName), searchNorm) < DOUBT_DISTANCE_THRESHOLD
+      ).length;
+      parts.push(
+        `⚠️ ${closeCount} marca(s) similar(es) muy cercana(s) — revisar manualmente`
+      );
+    }
+  }
+
+  // ── Build matchGroups — granular subdivisions ─────────────────────
   const matchGroups: MatchGroup[] = [];
 
-  if (exact.length > 0) {
+  if (hasFilter) {
+    // With NIZA filter: split exact into "your industry" vs "other"
+    if (exactActiveRelevant.length > 0) {
+      matchGroups.push({
+        level: "exact",
+        label: `⚠️ Exactas activas EN TU RUBRO (${exactActiveRelevant.length})`,
+        matches: exactActiveRelevant,
+      });
+    }
+    if (exactActiveOther.length > 0) {
+      matchGroups.push({
+        level: "exact",
+        label: `Exactas activas en otros rubros (${exactActiveOther.length})`,
+        matches: exactActiveOther,
+      });
+    }
+  } else {
+    // No filter: one group for all exact active
+    if (exactActive.length > 0) {
+      matchGroups.push({
+        level: "exact",
+        label: `Exactas activas (${exactActive.length})`,
+        matches: exactActive,
+      });
+    }
+  }
+
+  if (exactInactive.length > 0) {
     matchGroups.push({
       level: "exact",
-      label: `Coincidencias exactas (${exact.length})`,
-      matches: exact,
+      label: `Exactas inactivas (${exactInactive.length})`,
+      matches: exactInactive,
     });
   }
 
@@ -211,7 +246,7 @@ export function processTrademarkMatches(
   return {
     platform: config.platform,
     displayName: config.displayName,
-    status: isTaken ? "taken" : "available",
+    status: isTaken ? "taken" : isDoubtful ? "unknown" : "available",
     detail: parts.join("\n"),
     url: config.searchUrl,
     responseTimeMs: Date.now() - startTime,
