@@ -7,7 +7,7 @@ import { loadHistory, clearHistory } from "./history.js";
 import type { BrandCheckResponse } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PORT = 3456;
+const PORT = Number(process.env.PORT) || 3456;
 
 // ── In-memory cache with 10-minute TTL ────────────────────────────────
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
