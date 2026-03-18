@@ -243,6 +243,93 @@
     }
     .card-link:hover { color: var(--text); }
 
+    /* ── Match groups accordion ─────────────────────────────────── */
+    .match-groups { margin-top: 0.75rem; }
+
+    .mg-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.7rem;
+      background: var(--bg);
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      cursor: pointer;
+      user-select: none;
+      margin-bottom: 0.25rem;
+      transition: background 0.15s;
+    }
+    .mg-header:hover { background: var(--border-light); }
+
+    .mg-chevron {
+      font-size: 0.6rem;
+      transition: transform 0.2s;
+      color: var(--text-muted);
+    }
+    .mg-header.open .mg-chevron { transform: rotate(90deg); }
+
+    .mg-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--text-secondary);
+      flex: 1;
+    }
+
+    .mg-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .mg-dot.exact { background: var(--red); }
+    .mg-dot.contains { background: var(--yellow); }
+    .mg-dot.partial { background: #F97316; }
+
+    .mg-count {
+      font-size: 0.6rem;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .mg-body {
+      display: none;
+      padding: 0.25rem 0 0.5rem;
+    }
+    .mg-body.open { display: block; }
+
+    .mg-table {
+      width: 100%;
+      font-size: 0.68rem;
+      border-collapse: collapse;
+    }
+    .mg-table th {
+      text-align: left;
+      font-weight: 700;
+      color: var(--text-muted);
+      padding: 0.3rem 0.5rem;
+      border-bottom: 1px solid var(--border-light);
+      font-size: 0.6rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .mg-table td {
+      padding: 0.35rem 0.5rem;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-light);
+      vertical-align: top;
+    }
+    .mg-table tr:last-child td { border-bottom: none; }
+
+    .mg-brand-name { font-weight: 600; color: var(--text); }
+    .mg-status-active { color: var(--red); font-weight: 600; }
+    .mg-status-inactive { color: var(--text-muted); }
+
+    .mg-table-wrap {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+    }
+
     /* Variation grid */
     .var-section-title {
       font-size: 0.65rem;
@@ -561,16 +648,62 @@
     historyOverlay.addEventListener('click', closeHistory);
 
     // ── Render ─────────────────────────────────────────────────
+    let mgCounter = 0;
+    function renderMatchGroups(groups) {
+      if (!groups || !groups.length) return '';
+      let html = '<div class="match-groups">';
+      for (const g of groups) {
+        if (!g.matches.length) continue;
+        const id = `mg-${mgCounter++}`;
+        const activeCount = g.matches.filter(m => m.isActive).length;
+        html += `
+          <div class="mg-header" onclick="toggleMG('${id}')">
+            <span class="mg-dot ${g.level}"></span>
+            <span class="mg-chevron">&#9654;</span>
+            <span class="mg-label">${g.label}</span>
+            <span class="mg-count">${activeCount} activa(s)</span>
+          </div>
+          <div class="mg-body" id="${id}">
+            <div class="mg-table-wrap">
+              <table class="mg-table">
+                <thead><tr><th>Marca</th><th>Clase</th><th>Estado</th><th>Titular</th></tr></thead>
+                <tbody>`;
+        for (const m of g.matches) {
+          const statusCls = m.isActive ? 'mg-status-active' : 'mg-status-inactive';
+          const owner = m.owner.length > 40 ? m.owner.substring(0, 40) + '...' : m.owner;
+          const classes = m.niceClasses.join(', ') || '?';
+          html += `<tr>
+            <td class="mg-brand-name">${m.brandName}</td>
+            <td>${classes}</td>
+            <td class="${statusCls}">${m.status}</td>
+            <td>${owner}</td>
+          </tr>`;
+        }
+        html += '</tbody></table></div></div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function toggleMG(id) {
+      const body = document.getElementById(id);
+      const header = body.previousElementSibling;
+      body.classList.toggle('open');
+      header.classList.toggle('open');
+    }
+
     function renderCard(r) {
       let links = '';
       if (r.buyUrl) links += `<a class="card-link" href="${r.buyUrl}" target="_blank">Comprar</a>`;
       if (r.url) links += `<a class="card-link" href="${r.url}" target="_blank">Verificar \u2197</a>`;
+      const groupsHtml = renderMatchGroups(r.matchGroups);
       return `
         <div class="result-card">
           <div class="card-status ${r.status}"></div>
           <div class="card-body">
             <div class="card-platform">${r.displayName}</div>
             <div class="card-detail">${r.detail}</div>
+            ${groupsHtml}
           </div>
           <div class="card-right">
             <span class="card-badge ${r.status}">${badgeLabels[r.status]}</span>

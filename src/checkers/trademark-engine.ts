@@ -1,7 +1,8 @@
 /**
  * Shared trademark search engine.
  * Processes normalized TrademarkMatch[] from any registry (INPI, WIPO, etc.)
- * and produces a single CheckResult with NIZA class filtering and detail text.
+ * and produces a single CheckResult with NIZA class filtering, detail text,
+ * and structured matchGroups for UI rendering.
  *
  * Status is determined ONLY by exact-name matches.
  * Similar matches (compound names, letter variations) in relevant classes
@@ -9,6 +10,7 @@
  */
 import type {
   CheckResult,
+  MatchGroup,
   TrademarkMatch,
   TrademarkSearchConfig,
 } from "../types.js";
@@ -39,19 +41,22 @@ export function processTrademarkMatches(
       detail,
       url: config.searchUrl,
       responseTimeMs: Date.now() - startTime,
+      matchGroups: [],
     };
   }
 
-  // ── Split exact vs similar ────────────────────────────────────────
-  const exact = matches.filter((m) => m.isExactMatch);
-  const similar = matches.filter((m) => !m.isExactMatch);
+  // ── Split by similarity level ───────────────────────────────────
+  const exact = matches.filter((m) => m.similarityLevel === "exact");
+  const contains = matches.filter((m) => m.similarityLevel === "contains");
+  const partial = matches.filter((m) => m.similarityLevel === "partial");
 
   // ── Separate active / inactive (exact only — for status) ──────────
   const exactActive = exact.filter((m) => m.isActive);
   const exactInactive = exact.filter((m) => !m.isActive);
 
-  // ── Similar: only active ones are shown ───────────────────────────
-  const similarActive = similar.filter((m) => m.isActive);
+  // ── Active similar matches ──────────────────────────────────────
+  const containsActive = contains.filter((m) => m.isActive);
+  const partialActive = partial.filter((m) => m.isActive);
 
   // ── NIZA class filtering ──────────────────────────────────────────
   const relevantClasses = inferRelevantClasses(config.description || "");
@@ -68,10 +73,13 @@ export function processTrademarkMatches(
     ? exactActive.filter((m) => !matchHasRelevantClass(m))
     : [];
 
-  // Similar: only show those in relevant classes (the whole point)
-  const similarActiveRelevant = hasFilter
-    ? similarActive.filter(matchHasRelevantClass)
-    : similarActive;
+  // Contains/partial: filter by relevant class if available
+  const containsRelevant = hasFilter
+    ? containsActive.filter(matchHasRelevantClass)
+    : containsActive;
+  const partialRelevant = hasFilter
+    ? partialActive.filter(matchHasRelevantClass)
+    : partialActive;
 
   // ── Format helpers ────────────────────────────────────────────────
   const fmtExact = (m: TrademarkMatch) => {
@@ -87,20 +95,7 @@ export function processTrademarkMatches(
     return `  Clase ${nc} (${claseDesc})${countryPart} - ${statusShort} - ${ownerShort}`;
   };
 
-  const fmtSimilar = (m: TrademarkMatch) => {
-    const nc =
-      m.niceClasses.length > 0 ? m.niceClasses.map(String).join(", ") : "?";
-    const claseDesc = m.niceClasses
-      .map((c) => CLASE_DESCRIPTIONS[c] || `${c}`)
-      .join(", ");
-    const statusShort = m.status.split("(")[0].trim();
-    const ownerShort =
-      m.owner.length > 40 ? m.owner.substring(0, 40) + "..." : m.owner;
-    const countryPart = m.country ? ` - ${m.country}` : "";
-    return `  "${m.brandName}" - Clase ${nc} (${claseDesc})${countryPart} - ${statusShort} - ${ownerShort}`;
-  };
-
-  // ── Build detail text ─────────────────────────────────────────────
+  // ── Build detail text (summary) ─────────────────────────────────
   const parts: string[] = [];
 
   // Context line
@@ -168,21 +163,50 @@ export function processTrademarkMatches(
     parts.push(`Ninguna coincidencia exacta con "${config.brandName}"`);
   }
 
-  // ── Similar matches section (informational) ───────────────────────
-  if (similarActiveRelevant.length > 0) {
-    const classLabel = hasFilter ? " en tu rubro" : "";
+  // ── Similar matches summary (counts only — full data in matchGroups) ──
+  const classLabel = hasFilter ? " en tu rubro" : "";
+  if (containsRelevant.length > 0) {
     parts.push(
-      `👀 ${similarActiveRelevant.length} similar(es) activa(s)${classLabel}:`
+      `🟡 ${containsRelevant.length} marca(s) contienen "${config.brandName}"${classLabel}`
     );
-    for (const m of similarActiveRelevant.slice(0, 6)) parts.push(fmtSimilar(m));
-    if (similarActiveRelevant.length > 6)
-      parts.push(`  ... y ${similarActiveRelevant.length - 6} mas`);
+  }
+  if (partialRelevant.length > 0) {
+    parts.push(
+      `🟠 ${partialRelevant.length} coincidencia(s) parcial(es)${classLabel}`
+    );
   }
 
   // ── Determine status (ONLY from exact matches) ────────────────────
   const isTaken = hasFilter
     ? exactActiveRelevant.length > 0
     : exactActive.length > 0;
+
+  // ── Build matchGroups (ALL matches, not truncated) ────────────────
+  const matchGroups: MatchGroup[] = [];
+
+  if (exact.length > 0) {
+    matchGroups.push({
+      level: "exact",
+      label: `Coincidencias exactas (${exact.length})`,
+      matches: exact,
+    });
+  }
+
+  if (contains.length > 0) {
+    matchGroups.push({
+      level: "contains",
+      label: `Contienen "${config.brandName}" (${contains.length})`,
+      matches: contains,
+    });
+  }
+
+  if (partial.length > 0) {
+    matchGroups.push({
+      level: "partial",
+      label: `Coincidencias parciales (${partial.length})`,
+      matches: partial,
+    });
+  }
 
   return {
     platform: config.platform,
@@ -191,5 +215,6 @@ export function processTrademarkMatches(
     detail: parts.join("\n"),
     url: config.searchUrl,
     responseTimeMs: Date.now() - startTime,
+    matchGroups,
   };
 }

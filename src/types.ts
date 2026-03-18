@@ -1,5 +1,13 @@
 export type CheckStatus = "available" | "taken" | "error" | "unknown";
 
+export type SimilarityLevel = "exact" | "contains" | "partial";
+
+export interface MatchGroup {
+  level: SimilarityLevel;
+  label: string;
+  matches: TrademarkMatch[];
+}
+
 export interface CheckResult {
   platform: string;
   displayName: string;
@@ -8,6 +16,7 @@ export interface CheckResult {
   url?: string;
   buyUrl?: string;
   responseTimeMs: number;
+  matchGroups?: MatchGroup[];
 }
 
 export interface BrandCheckRequest {
@@ -47,6 +56,7 @@ export interface TrademarkMatch {
   status: string;
   isActive: boolean;
   isExactMatch: boolean;
+  similarityLevel: SimilarityLevel;
   sourceId: string;
   country?: string;
   ipr?: string;

@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import type { CheckResult, TrademarkMatch } from "../types.js";
+import type { CheckResult, TrademarkMatch, SimilarityLevel } from "../types.js";
 import { processTrademarkMatches } from "./trademark-engine.js";
 
 const SEARCH_URL = "https://branddb.wipo.int/en/similarname";
@@ -46,14 +46,31 @@ function parseWIPOCard(
   const numIdx = lines.findIndex((l) => l === "Number");
   const number = numIdx >= 0 ? lines[numIdx + 1] || "" : "";
 
-  // Include exact and similar matches (compound names, letter variations)
+  // Compute similarity level
   const brandNorm = brand.toUpperCase().replace(/[^A-Z0-9]/g, "");
   const searchNorm = brandName.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const isSimilar =
-    brandNorm.includes(searchNorm) || searchNorm.includes(brandNorm);
 
-  if (brand.toUpperCase() !== brandName.toUpperCase() && !isSimilar) {
-    return null;
+  let similarityLevel: SimilarityLevel;
+  if (brandNorm === searchNorm) {
+    similarityLevel = "exact";
+  } else if (
+    brandNorm.includes(searchNorm) || searchNorm.includes(brandNorm)
+  ) {
+    similarityLevel = "contains";
+  } else {
+    // WIPO already does similarity matching server-side, so anything
+    // returned that isn't exact or contains is a partial match
+    similarityLevel = "partial";
+  }
+
+  // Filter out results that have no similarity at all
+  if (
+    similarityLevel !== "exact" &&
+    similarityLevel !== "contains" &&
+    !brandNorm.includes(searchNorm) &&
+    !searchNorm.includes(brandNorm)
+  ) {
+    // Still keep — WIPO's server already filtered for similarity
   }
 
   const isActive =
@@ -62,7 +79,7 @@ function parseWIPOCard(
     status.toLowerCase().includes("pending") ||
     status.toLowerCase().includes("protected");
 
-  const isExactMatch = brand.toUpperCase() === brandName.toUpperCase();
+  const isExactMatch = similarityLevel === "exact";
 
   return {
     brandName: brand,
@@ -71,6 +88,7 @@ function parseWIPOCard(
     status,
     isActive,
     isExactMatch,
+    similarityLevel,
     sourceId: number,
     country,
     ipr,
